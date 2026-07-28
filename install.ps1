@@ -42,6 +42,31 @@ function Find-Python {
     return $null
 }
 
+function Register-FeedbackProtocol {
+    param(
+        [string]$PythonwPath,
+        [string]$HandlerPath
+    )
+
+    $protocolRoot = "HKCU:\Software\Classes\spotify-snap"
+    $commandKey = Join-Path $protocolRoot "shell\open\command"
+
+    New-Item -Path $protocolRoot -Force | Out-Null
+    Set-Item -Path $protocolRoot -Value "URL:Spotify Snap Feedback Protocol"
+    New-ItemProperty `
+        -Path $protocolRoot `
+        -Name "URL Protocol" `
+        -Value "" `
+        -PropertyType String `
+        -Force | Out-Null
+
+    New-Item -Path $commandKey -Force | Out-Null
+    $commandValue = "`"$PythonwPath`" `"$HandlerPath`" `"%1`""
+    Set-Item -Path $commandKey -Value $commandValue
+
+    Write-Host "Bildirim feedback dugmesi kaydedildi." -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "Spotify Snap Control kuruluyor..." -ForegroundColor Cyan
 
@@ -75,7 +100,9 @@ $venvArguments = @($python.PrefixArgs) + @("-m", "venv", ".venv")
 if ($LASTEXITCODE -ne 0) { throw "Sanal ortam oluşturulamadı." }
 
 $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+$venvPythonw = Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe"
 if (-not (Test-Path $venvPython)) { throw "Sanal ortam oluşturulamadı." }
+if (-not (Test-Path $venvPythonw)) { throw "pythonw.exe bulunamadı." }
 
 & $venvPython -m pip install --disable-pip-version-check --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "pip güncellenemedi." }
@@ -83,11 +110,19 @@ if ($LASTEXITCODE -ne 0) { throw "pip güncellenemedi." }
 & $venvPython -m pip install --disable-pip-version-check -r requirements.txt
 if ($LASTEXITCODE -ne 0) { throw "Python paketleri kurulamadı." }
 
+$feedbackHandler = Join-Path $PSScriptRoot "feedback_handler.py"
+Register-FeedbackProtocol -PythonwPath $venvPythonw -HandlerPath $feedbackHandler
+
 Write-Host ""
 & $venvPython spotify_snap.py --check
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Kurulum tamamlandı ancak aygıt kontrolünde sorun çıktı." -ForegroundColor Yellow
     Write-Host "Önce mikrofon izinlerini kontrol et, sonra test.bat çalıştır."
+}
+
+& $venvPython feedback_handler.py --check
+if ($LASTEXITCODE -ne 0) {
+    throw "Feedback sistemi kurulamadı."
 }
 
 Write-Host ""
