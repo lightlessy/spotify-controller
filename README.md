@@ -32,6 +32,7 @@ Kurucu:
 
 - Arka planda sessiz çalıştırmak için: **`start-hidden.vbs`**
 - Konsolu ve algılama mesajlarını görmek için: **`start.bat`**
+- Programı tamamen kapatmak için: **`stop.bat`**
 - Ayrıntılı ses değerlerini görmek için: **`debug.bat`**
 
 Aynı anda yalnızca bir kopya çalışabilir.
@@ -94,7 +95,7 @@ Mümkünse kulaklık kullan. Hoparlörden gelen sert hi-hat ve clap sesleri akus
 
 ### Programı tamamen kapatma
 
-Görev Yöneticisi'nde `pythonw.exe` işlemini sonlandır veya oturumu kapat. Konsoldan `start.bat` ile çalıştırdıysan `Ctrl+C` yeterlidir.
+`stop.bat` dosyasına çift tıkla. Konsoldan `start.bat` ile çalıştırdıysan `Ctrl+C` de yeterlidir.
 
 ## Nasıl çalışıyor?
 
