@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
+import threading
 import time
+from collections import deque
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 import sounddevice as sd
@@ -22,46 +26,103 @@ from snap_model import (
 CALIBRATION_DIR = core.APP_DIR / "training_data" / "calibration"
 
 
-def record_audio(seconds: float, settings: core.Settings) -> np.ndarray:
-    audio = sd.rec(
-        int(seconds * settings.sample_rate),
-        samplerate=settings.sample_rate,
-        channels=1,
-        dtype="float32",
-        device=settings.input_device,
-        blocking=True,
-    )
-    return np.asarray(audio[:, 0], dtype=np.float32)
+class ContinuousRecorder:
+    """Keep the microphone open so Windows/driver warm-up is paid only once."""
 
+    def __init__(self, settings: core.Settings, buffer_seconds: float = 16.0) -> None:
+        self.settings = settings
+        self._lock = threading.Lock()
+        max_blocks = max(
+            8,
+            math.ceil(
+                buffer_seconds * settings.sample_rate / settings.block_size
+            )
+            + 8,
+        )
+        self._blocks: deque[np.ndarray] = deque(maxlen=max_blocks)
+        self._stream: sd.InputStream | None = None
 
-def record_single_snap(index: int, settings: core.Settings) -> np.ndarray:
-    """Record one user-confirmed snap sample.
+    def _callback(
+        self,
+        indata: np.ndarray,
+        frames: int,
+        time_info: Any,
+        status: Any,
+    ) -> None:
+        if status:
+            print(f"\n[Mikrofon] {status}")
+        mono = np.asarray(indata[:, 0], dtype=np.float32).copy()
+        with self._lock:
+            self._blocks.append(mono)
 
-    Automatic peak/noise-ratio validation is intentionally avoided here.
-    Laptop microphone processing can make a real snap quieter than startup
-    noise, while speech or a desk impact can be much louder. The user knows
-    whether they snapped during the prompted window, so explicit confirmation
-    is the reliable calibration label.
-    """
-    while True:
-        input(f"\n[{index}/12] Hazır olunca Enter'a bas: ")
-        print("Kayıt açıldı... 0,5 saniye sonra ŞİMDİ yazacak.")
-        audio = sd.rec(
-            int(1.35 * settings.sample_rate),
-            samplerate=settings.sample_rate,
+    def __enter__(self) -> "ContinuousRecorder":
+        self._stream = sd.InputStream(
+            device=self.settings.input_device,
+            samplerate=self.settings.sample_rate,
+            blocksize=self.settings.block_size,
             channels=1,
             dtype="float32",
-            device=settings.input_device,
-            blocking=False,
+            callback=self._callback,
         )
+        self._stream.start()
+        print("Mikrofon açıldı; sürücü dengeleniyor...")
+        time.sleep(2.0)
+        self.clear()
+        print("Mikrofon hazır.")
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+
+    def clear(self) -> None:
+        with self._lock:
+            self._blocks.clear()
+
+    def snapshot(self, seconds: float) -> np.ndarray:
+        target = max(1, int(round(seconds * self.settings.sample_rate)))
+        with self._lock:
+            if self._blocks:
+                audio = np.concatenate(tuple(self._blocks)).astype(
+                    np.float32, copy=False
+                )
+            else:
+                audio = np.empty(0, dtype=np.float32)
+
+        if audio.size >= target:
+            return audio[-target:].copy()
+
+        output = np.zeros(target, dtype=np.float32)
+        if audio.size:
+            output[-audio.size :] = audio
+        return output
+
+    def record(self, seconds: float) -> np.ndarray:
+        self.clear()
+        time.sleep(seconds)
+        return self.snapshot(seconds)
+
+
+def record_single_snap(
+    index: int,
+    settings: core.Settings,
+    recorder: ContinuousRecorder,
+) -> np.ndarray:
+    """Record one user-confirmed snap without reopening the microphone."""
+
+    while True:
+        input(f"\n[{index}/12] Hazır olunca Enter'a bas: ")
+        recorder.clear()
+        print("0,5 saniye sonra ŞİMDİ yazacak.")
         time.sleep(0.50)
         print("ŞİMDİ — bir kez net şıklat!")
-        sd.wait()
-        samples = np.asarray(audio[:, 0], dtype=np.float32)
+        time.sleep(0.85)
 
-        search_start = int(0.38 * settings.sample_rate)
-        search_end = int(1.28 * settings.sample_rate)
-        candidate = samples[search_start:search_end]
+        samples = recorder.snapshot(1.35)
+        search_start = int(0.42 * settings.sample_rate)
+        candidate = samples[search_start:]
         event = extract_event_window(candidate, settings.sample_rate)
         peak, rms = event_levels(event, settings.sample_rate)
 
@@ -82,12 +143,16 @@ def countdown() -> None:
         time.sleep(1)
 
 
-def record_phase(label: str, seconds: float, settings: core.Settings) -> np.ndarray:
+def record_phase(
+    label: str,
+    seconds: float,
+    recorder: ContinuousRecorder,
+) -> np.ndarray:
     print(f"\n{label}")
     input("Hazır olduğunda yalnızca Enter'a bas: ")
     countdown()
     print("KAYIT BAŞLADI")
-    audio = record_audio(seconds, settings)
+    audio = recorder.record(seconds)
     print("KAYIT BİTTİ")
     return audio
 
@@ -97,28 +162,32 @@ def main() -> int:
     print("Spotify Snap kişisel kalibrasyonu v2")
     print("------------------------------------")
     print("Kayıtlar yalnızca bu bilgisayarda tutulur.")
+    print("Mikrofon tüm işlem boyunca açık kalır; başlangıçtaki sıfır kayıtlar elenir.")
     print("Her şıklatma ayrı alınır ve senin onayınla etiketlenir.")
     print("Peak değeri yalnızca bilgi amaçlıdır; bağırma veya masaya vurma.")
 
-    positive_windows = [
-        record_single_snap(index, settings) for index in range(1, 13)
-    ]
+    with ContinuousRecorder(settings) as recorder:
+        positive_windows = [
+            record_single_snap(index, settings, recorder)
+            for index in range(1, 13)
+        ]
 
-    silence_audio = record_phase(
-        "5 saniye sessiz kal. Şıklatma, konuşma ve klavye sesi çıkarma.",
-        5.0,
-        settings,
-    )
-    speech_audio = record_phase(
-        "10 saniye normal sesle konuş. Şıklatma ve klavye sesi çıkarma.",
-        10.0,
-        settings,
-    )
-    keyboard_audio = record_phase(
-        "8 saniye klavyede normal hızda yaz; Enter ve Space'e de bas. Konuşma ve şıklatma yapma.",
-        8.0,
-        settings,
-    )
+        silence_audio = record_phase(
+            "5 saniye sessiz kal. Şıklatma, konuşma ve klavye sesi çıkarma.",
+            5.0,
+            recorder,
+        )
+        speech_audio = record_phase(
+            "10 saniye normal sesle konuş. Şıklatma ve klavye sesi çıkarma.",
+            10.0,
+            recorder,
+        )
+        keyboard_audio = record_phase(
+            "8 saniye klavyede normal hızda yaz; Enter ve Space'e de bas. "
+            "Konuşma ve şıklatma yapma.",
+            8.0,
+            recorder,
+        )
 
     negative_windows: list[np.ndarray] = []
     negative_windows.extend(
