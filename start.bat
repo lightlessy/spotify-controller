@@ -5,5 +5,5 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" spotify_snap.py
+".venv\Scripts\python.exe" spotify_snap_feedback.py
 if errorlevel 1 pause
