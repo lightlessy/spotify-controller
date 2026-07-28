@@ -1,0 +1,14 @@
+{
+  "sample_rate": 48000,
+  "block_size": 1024,
+  "input_device": null,
+  "double_snap_window": 0.48,
+  "refractory_time": 0.17,
+  "min_rms": 0.006,
+  "min_peak": 0.045,
+  "noise_multiplier": 2.8,
+  "min_crest_factor": 3.5,
+  "min_high_frequency_ratio": 0.3,
+  "high_frequency_cutoff_hz": 2500,
+  "debug": false
+}
