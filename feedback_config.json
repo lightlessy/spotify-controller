@@ -1,0 +1,5 @@
+{
+  "notifications_enabled": true,
+  "capture_seconds": 1.5,
+  "pending_retention_hours": 24
+}
