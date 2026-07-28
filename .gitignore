@@ -2,4 +2,5 @@
 __pycache__/
 *.py[cod]
 spotify_snap.log
+training_data/
 .DS_Store
