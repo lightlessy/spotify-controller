@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import time
 from collections import deque
@@ -8,7 +9,8 @@ import numpy as np
 
 import spotify_snap as core
 import spotify_snap_feedback as app
-from snap_model import SnapModel
+from overlay_notification import OverlayNotificationService
+from snap_model import MODEL_PATH, SnapModel
 
 
 class CalibratedSnapDetector:
@@ -17,6 +19,8 @@ class CalibratedSnapDetector:
     def __init__(self, settings: core.Settings) -> None:
         self.settings = settings
         self.model = SnapModel.load()
+        self.model_mtime_ns = self._model_mtime_ns()
+        self.next_model_check = 0.0
         self.blocks: deque[np.ndarray] = deque(maxlen=16)
         self.pending_blocks = 0
         self.last_detection = 0.0
@@ -25,6 +29,31 @@ class CalibratedSnapDetector:
         self.noise_peak = max(1e-7, self.model.candidate_peak * 0.35)
         self.noise_rms = max(1e-8, self.model.candidate_rms * 0.35)
         self.window = np.hanning(settings.block_size).astype(np.float32)
+
+    @staticmethod
+    def _model_mtime_ns() -> int:
+        try:
+            return MODEL_PATH.stat().st_mtime_ns
+        except OSError:
+            return 0
+
+    def _reload_model_if_changed(self, now: float) -> None:
+        if now < self.next_model_check:
+            return
+        self.next_model_check = now + 0.75
+        current_mtime = self._model_mtime_ns()
+        if current_mtime <= self.model_mtime_ns:
+            return
+        try:
+            model = SnapModel.load()
+        except Exception:
+            logging.exception("Güncellenen kişisel model yüklenemedi; eski model korunuyor.")
+            return
+        self.model = model
+        self.model_mtime_ns = current_mtime
+        self.noise_peak = max(1e-8, self.noise_peak)
+        self.noise_rms = max(1e-9, self.noise_rms)
+        logging.info("Kişisel model canlı olarak güncellendi.")
 
     def _metrics(self, samples: np.ndarray) -> dict[str, float]:
         samples = np.asarray(samples, dtype=np.float32)
@@ -75,6 +104,7 @@ class CalibratedSnapDetector:
         self.blocks.append(samples.copy())
         metrics = self._metrics(samples)
         now = time.monotonic()
+        self._reload_model_if_changed(now)
 
         if now < self.warmup_until:
             self._update_noise(metrics, rate=0.12)
@@ -133,6 +163,7 @@ class CalibratedSnapDetector:
 
 
 core.SnapDetector = CalibratedSnapDetector
+app.NotificationService = OverlayNotificationService
 
 
 if __name__ == "__main__":
