@@ -106,12 +106,12 @@ class CalibratedSnapDetector:
         event_audio: np.ndarray,
         classifier_metrics: dict[str, float],
     ) -> bool:
-        """Give user-labelled false positives a direct one-neighbour veto.
+        """Apply conservative user-feedback vetoes.
 
-        Base calibration negatives still use the regular k-neighbour score.
-        Online negatives are different: they are explicit user corrections and
-        must have immediate influence, so an event is rejected whenever it is
-        at least as close to a learnt false positive as to a true snap.
+        A nearly identical false-positive can veto by itself. Broader
+        generalisation requires a small cluster of learnt negatives, which
+        prevents one unusual or accidentally labelled example from suppressing
+        genuine snaps.
         """
 
         online_count = int(self.model.training.get("online_negative_count", 0))
@@ -127,22 +127,39 @@ class CalibratedSnapDetector:
         ) / self.model.feature_std
         hard_negatives = self.model.negative_examples[-online_count:]
 
-        positive_distances = np.sum(
-            (self.model.positive_examples - query) ** 2,
-            axis=1,
+        positive_distances = np.sort(
+            np.sum((self.model.positive_examples - query) ** 2, axis=1)
         )
-        hard_negative_distances = np.sum(
-            (hard_negatives - query) ** 2,
-            axis=1,
+        hard_negative_distances = np.sort(
+            np.sum((hard_negatives - query) ** 2, axis=1)
         )
-        positive_nearest = float(np.min(positive_distances))
-        hard_negative_nearest = float(np.min(hard_negative_distances))
 
-        # A small tolerance generalises one marked clap to nearby clap variants.
-        veto = hard_negative_nearest <= positive_nearest * 1.15 + 1e-9
+        positive_k = max(1, min(3, len(positive_distances)))
+        hard_k = max(1, min(5, len(hard_negative_distances)))
+        positive_reference = float(np.mean(positive_distances[:positive_k]))
+        hard_nearest = float(hard_negative_distances[0])
+        hard_cluster_mean = float(np.mean(hard_negative_distances[:hard_k]))
+
+        # One example may veto only when the event is extremely close to it.
+        exact_veto = hard_nearest <= positive_reference * 0.45 + 1e-9
+
+        # Generalisation requires at least three nearby learnt negatives.
+        support_limit = positive_reference * 0.90 + 1e-9
+        support_count = int(np.sum(hard_negative_distances <= support_limit))
+        cluster_veto = (
+            hard_k >= 3
+            and support_count >= 3
+            and hard_cluster_mean <= positive_reference * 0.78 + 1e-9
+        )
+        veto = exact_veto or cluster_veto
+
         classifier_metrics["online_negative_count"] = float(online_count)
-        classifier_metrics["positive_nearest_distance"] = positive_nearest
-        classifier_metrics["hard_negative_distance"] = hard_negative_nearest
+        classifier_metrics["positive_reference_distance"] = positive_reference
+        classifier_metrics["hard_negative_distance"] = hard_nearest
+        classifier_metrics["hard_negative_cluster_mean"] = hard_cluster_mean
+        classifier_metrics["hard_negative_support"] = float(support_count)
+        classifier_metrics["hard_negative_exact_veto"] = float(exact_veto)
+        classifier_metrics["hard_negative_cluster_veto"] = float(cluster_veto)
         classifier_metrics["hard_negative_veto"] = float(veto)
         return veto
 
@@ -179,11 +196,18 @@ class CalibratedSnapDetector:
             )
             if hard_negative_veto:
                 accepted = False
+                veto_mode = (
+                    "exact"
+                    if metrics["hard_negative_exact_veto"]
+                    else "cluster"
+                )
                 logging.info(
                     "Öğrenilmiş yanlış örnek veto etti "
-                    "(hard=%.2f, snap=%.2f).",
+                    "(mod=%s, hard=%.2f, snap=%.2f, destek=%d).",
+                    veto_mode,
                     metrics["hard_negative_distance"],
-                    metrics["positive_nearest_distance"],
+                    metrics["positive_reference_distance"],
+                    int(metrics["hard_negative_support"]),
                 )
 
             self.candidate_lockout_until = now + 0.12
