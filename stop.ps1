@@ -1,6 +1,7 @@
 $processes = Get-CimInstance Win32_Process | Where-Object {
     ($_.Name -eq "pythonw.exe" -or $_.Name -eq "python.exe") -and
-    $_.CommandLine -like "*spotify_snap.py*"
+    ($_.CommandLine -like "*spotify_snap_feedback.py*" -or
+     $_.CommandLine -like "*spotify_snap.py*")
 }
 
 if (-not $processes) {
