@@ -10,7 +10,7 @@ import numpy as np
 import spotify_snap as core
 import spotify_snap_feedback as app
 from overlay_notification import OverlayNotificationService
-from snap_model import MODEL_PATH, SnapModel
+from snap_model import MODEL_PATH, SnapModel, feature_vector
 
 
 class CalibratedSnapDetector:
@@ -53,7 +53,11 @@ class CalibratedSnapDetector:
         self.model_mtime_ns = current_mtime
         self.noise_peak = max(1e-8, self.noise_peak)
         self.noise_rms = max(1e-9, self.noise_rms)
-        logging.info("Kişisel model canlı olarak güncellendi.")
+        online_count = int(self.model.training.get("online_negative_count", 0))
+        logging.info(
+            "Kişisel model canlı güncellendi (%d öğrenilmiş yanlış örnek).",
+            online_count,
+        )
 
     def _metrics(self, samples: np.ndarray) -> dict[str, float]:
         samples = np.asarray(samples, dtype=np.float32)
@@ -97,6 +101,51 @@ class CalibratedSnapDetector:
             metrics["rms"], rms_cap
         )
 
+    def _hard_negative_veto(
+        self,
+        event_audio: np.ndarray,
+        classifier_metrics: dict[str, float],
+    ) -> bool:
+        """Give user-labelled false positives a direct one-neighbour veto.
+
+        Base calibration negatives still use the regular k-neighbour score.
+        Online negatives are different: they are explicit user corrections and
+        must have immediate influence, so an event is rejected whenever it is
+        at least as close to a learnt false positive as to a true snap.
+        """
+
+        online_count = int(self.model.training.get("online_negative_count", 0))
+        online_count = max(0, min(online_count, len(self.model.negative_examples)))
+        if online_count == 0:
+            classifier_metrics["online_negative_count"] = 0.0
+            classifier_metrics["hard_negative_veto"] = 0.0
+            return False
+
+        query = (
+            feature_vector(event_audio, self.settings.sample_rate)
+            - self.model.feature_mean
+        ) / self.model.feature_std
+        hard_negatives = self.model.negative_examples[-online_count:]
+
+        positive_distances = np.sum(
+            (self.model.positive_examples - query) ** 2,
+            axis=1,
+        )
+        hard_negative_distances = np.sum(
+            (hard_negatives - query) ** 2,
+            axis=1,
+        )
+        positive_nearest = float(np.min(positive_distances))
+        hard_negative_nearest = float(np.min(hard_negative_distances))
+
+        # A small tolerance generalises one marked clap to nearby clap variants.
+        veto = hard_negative_nearest <= positive_nearest * 1.15 + 1e-9
+        classifier_metrics["online_negative_count"] = float(online_count)
+        classifier_metrics["positive_nearest_distance"] = positive_nearest
+        classifier_metrics["hard_negative_distance"] = hard_negative_nearest
+        classifier_metrics["hard_negative_veto"] = float(veto)
+        return veto
+
     def analyze(
         self, samples: np.ndarray
     ) -> tuple[bool, dict[str, float]]:
@@ -123,6 +172,19 @@ class CalibratedSnapDetector:
             metrics.update(classifier_metrics)
             metrics["peak"] = classifier_metrics["event_peak"]
             metrics["rms"] = classifier_metrics["event_rms"]
+
+            hard_negative_veto = self._hard_negative_veto(
+                event_audio,
+                metrics,
+            )
+            if hard_negative_veto:
+                accepted = False
+                logging.info(
+                    "Öğrenilmiş yanlış örnek veto etti "
+                    "(hard=%.2f, snap=%.2f).",
+                    metrics["hard_negative_distance"],
+                    metrics["positive_nearest_distance"],
+                )
 
             self.candidate_lockout_until = now + 0.12
             if (
