@@ -5,7 +5,13 @@ import logging
 import sys
 
 import spotify_snap as core
-from feedback import FeedbackStore, NotificationService, load_feedback_settings
+from feedback import (
+    FALSE_POSITIVE_DIR,
+    FeedbackStore,
+    NotificationService,
+    load_feedback_settings,
+)
+from online_learning import learn_from_wav
 
 
 def configure_logging() -> None:
@@ -62,7 +68,17 @@ def main() -> int:
         raise SystemExit("Feedback bağlantısı eksik.")
 
     try:
-        status = store.mark_false_positive_from_uri(args.feedback_uri)
+        event_id = store.event_id_from_uri(args.feedback_uri)
+        status = store.mark_false_positive(event_id)
+        if status == "saved":
+            learned = learn_from_wav(
+                FALSE_POSITIVE_DIR / f"{event_id}.wav",
+                source=f"windows_toast_false_positive:{event_id}",
+            )
+            logging.info(
+                "Yanlış algılama modele öğretildi (%d negatif pencere).",
+                learned,
+            )
     except Exception as exc:
         logging.exception("Feedback kaydedilemedi: %s", exc)
         status = "expired"
