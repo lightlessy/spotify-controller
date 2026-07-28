@@ -35,6 +35,14 @@ def record_audio(seconds: float, settings: core.Settings) -> np.ndarray:
 
 
 def record_single_snap(index: int, settings: core.Settings) -> np.ndarray:
+    """Record one user-confirmed snap sample.
+
+    Automatic peak/noise-ratio validation is intentionally avoided here.
+    Laptop microphone processing can make a real snap quieter than startup
+    noise, while speech or a desk impact can be much louder. The user knows
+    whether they snapped during the prompted window, so explicit confirmation
+    is the reliable calibration label.
+    """
     while True:
         input(f"\n[{index}/12] Hazır olunca Enter'a bas: ")
         print("Kayıt açıldı... 0,5 saniye sonra ŞİMDİ yazacak.")
@@ -55,16 +63,17 @@ def record_single_snap(index: int, settings: core.Settings) -> np.ndarray:
         search_end = int(1.28 * settings.sample_rate)
         candidate = samples[search_start:search_end]
         event = extract_event_window(candidate, settings.sample_rate)
-        peak, _ = event_levels(event, settings.sample_rate)
+        peak, rms = event_levels(event, settings.sample_rate)
 
-        baseline = samples[: int(0.35 * settings.sample_rate)]
-        baseline_peak = float(np.quantile(np.abs(baseline), 0.995)) + 1e-9
-        ratio = peak / baseline_peak
-        print(f"Ölçüm: peak={peak:.6f}, arka plana oran={ratio:.1f}x")
-        if peak >= 1e-5 and ratio >= 2.0:
+        print(f"Ölçüm: peak={peak:.6f}, rms={rms:.6f}")
+        answer = input(
+            "Bu denemede gerçekten bir kez şıklattıysan Enter; "
+            "tekrar için R yaz: "
+        ).strip().lower()
+        if answer not in {"r", "retry", "tekrar"}:
             return event
 
-        print("Bu örnek net görünmedi; aynı şıklatmayı tekrar alıyorum.")
+        print("Örnek yeniden alınacak.")
 
 
 def countdown() -> None:
@@ -88,7 +97,8 @@ def main() -> int:
     print("Spotify Snap kişisel kalibrasyonu v2")
     print("------------------------------------")
     print("Kayıtlar yalnızca bu bilgisayarda tutulur.")
-    print("Her şıklatma ayrı alınacak; otomatik olarak sessizlik seçilmeyecek.")
+    print("Her şıklatma ayrı alınır ve senin onayınla etiketlenir.")
+    print("Peak değeri yalnızca bilgi amaçlıdır; bağırma veya masaya vurma.")
 
     positive_windows = [
         record_single_snap(index, settings) for index in range(1, 13)
