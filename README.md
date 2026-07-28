@@ -4,10 +4,22 @@ Windows'ta parmak şıklatmasıyla Spotify masaüstü uygulamasını kontrol ede
 
 - **Tek şıklatma:** sonraki şarkı
 - **Çift şıklatma:** önceki şarkı
-- Spotify duraklatılmışsa veya kapalıysa hiçbir komut göndermez.
-- Her başarılı algılamadan sonra modern bir Windows bildirimi gösterir.
-- Bildirimdeki **Hatalı algılamaydı** düğmesi, ilgili ses örneğini yanlış-pozitif eğitim verisine ekler.
-- Spotify hesabı, API anahtarı veya tarayıcı eklentisi istemez.
+- Spotify duraklatılmışsa veya kapalıysa komut göndermez.
+- Başarılı algılamadan sonra Windows bildirimi gösterir.
+- **Hatalı algılamaydı** düğmesi ilgili ses örneğini yerel yanlış-pozitif verisine ekler.
+- Spotify hesabı veya API anahtarı istemez.
+
+## Nasıl algılıyor?
+
+Uygulama artık yalnızca sabit ses eşiklerine güvenmez:
+
+1. Geniş bir transient dedektörü olası kısa sesleri aday olarak toplar.
+2. Adayın çevresindeki yaklaşık 180 ms ses penceresinden zamansal ve spektral özellikler çıkarılır.
+3. `calibrate.bat` sırasında senin şıklatmaların; konuşma ve klavye seslerine karşı öğrenilir.
+4. Yerel k-en-yakın-komşu doğrulayıcı yalnızca şıklatmaya benzeyen adayları kabul eder.
+5. Mikrofon açılışındaki pop seslerini elemek için ilk 1,8 saniye yok sayılır.
+
+Model, kayıt ve özellikler hiçbir sunucuya gönderilmez.
 
 ## Kurulum
 
@@ -18,46 +30,40 @@ git clone https://github.com/lightlessy/spotify-controller.git
 cd spotify-controller
 ```
 
-Git kullanmıyorsan GitHub'da **Code > Download ZIP** ile indirip klasörü çıkartabilirsin.
+### 2. `install.bat` çalıştır
 
-### 2. `install.bat` dosyasına çift tıkla
+Kurucu Python ortamını oluşturur, paketleri yükler, mikrofonu ve Windows medya kontrolünü test eder; feedback bildirim protokolünü kaydeder.
 
-Kurucu:
+### 3. `calibrate.bat` çalıştır
 
-1. Gerekirse Python 3.12'yi `winget` ile kurar.
-2. Projeye özel `.venv` oluşturur.
-3. Gerekli paketleri yükler.
-4. Mikrofon ve Windows medya kontrolünü test eder.
-5. Bildirimdeki feedback düğmesi için `spotify-snap://` protokolünü kullanıcı hesabına kaydeder.
-6. İstersen programı Windows başlangıcına ekler.
+Kalibrasyon iki kısa kayıt alır:
 
-### Mevcut kurulumu güncelleme
+- 12 net parmak şıklatması
+- Normal konuşma ve klavye kullanımı
 
-```powershell
-cd spotify-controller
-git pull
-```
-
-Ardından **`install.bat` dosyasını yeniden çalıştır**. Yeni bildirim paketi kurulur ve feedback düğmesi Windows'a kaydedilir.
+Bittiğinde kişisel model `snap_model.json` olarak kaydedilir. Bu dosya `.gitignore` içindedir.
 
 ## Çalıştırma
 
-- Arka planda sessiz çalıştırmak için: **`start-hidden.vbs`**
-- Konsolu ve algılama mesajlarını görmek için: **`start.bat`**
-- Programı tamamen kapatmak için: **`stop.bat`**
-- Ayrıntılı ses değerlerini görmek için: **`debug.bat`**
+- Görünür test: **`start.bat`**
+- Sessiz arka plan: **`start-hidden.vbs`**
+- Ayrıntılı ölçümler: **`debug.bat`**
+- Kapatma: **`stop.bat`**
+- Yeniden kalibrasyon: **`calibrate.bat`**
 
 Aynı anda yalnızca bir kopya çalışabilir.
 
-## Feedback nasıl çalışıyor?
+## Güncelleme
 
-Spotify komutu başarıyla uygulandığında bir Windows bildirimi gelir:
+```powershell
+git pull
+```
 
-- Bildirim hangi komutun çalıştığını söyler.
-- **Hatalı algılamaydı** düğmesi bulunur.
-- Her bildirim kendi algılama kimliğini taşır. Eski bir bildirime bassan bile doğru ses örneği etiketlenir.
+Algılama modeli değiştiyse `calibrate.bat` dosyasını yeniden çalıştır.
 
-Düğmeye bastığında ilgili kayıt şuraya taşınır:
+## Feedback
+
+Spotify komutu başarıyla uygulandığında bildirimde **Hatalı algılamaydı** düğmesi görünür. Düğmeye basıldığında ilgili kayıt şuraya taşınır:
 
 ```text
 training_data/
@@ -67,24 +73,39 @@ training_data/
     └── <event_id>.json
 ```
 
-- `.wav`: yaklaşık son 1,5 saniyelik mikrofon sesi
-- `.json`: eşik ölçümleri, tek/çift şıklatma bilgisi ve uygulanan komut
-- `manifest.csv`: model eğitiminde kolayca okunabilecek toplu indeks
-- Etiket: `false_positive`
+Geçici kayıtlar `training_data/pending/` altında tutulur ve varsayılan olarak sonraki temizlikte 24 saatten eskiyse silinir. Feedback verisi henüz modeli otomatik yeniden eğitmez.
 
-Bu özellik **henüz modeli otomatik olarak yeniden eğitmez**; temiz ve düzenli eğitim verisi biriktirir. Sonraki aşamada bu veriyle kişisel bir sınıflandırıcı eğitilebilir.
+Kalibrasyon kayıtları:
 
-## Gizlilik
+```text
+training_data/calibration/
+├── <tarih>-snaps.wav
+├── <tarih>-negatives.wav
+└── <tarih>-summary.json
+```
 
-- Ses verisi hiçbir sunucuya gönderilmez.
-- Kayıtlar yalnızca bilgisayarındaki repo klasöründe tutulur.
-- Bir komut algılandığında ses önce `training_data/pending/` altında geçici tutulur.
-- Feedback düğmesine basılmazsa geçici kayıt varsayılan olarak 24 saat sonra silinir.
-- `training_data/` `.gitignore` içindedir; yanlışlıkla GitHub'a push edilmez.
+`training_data/` ve `snap_model.json` Git'e dahil edilmez.
 
-## Feedback ayarları
+## Farklı mikrofon seçme
 
-`feedback_config.json` dosyasını Not Defteri ile açabilirsin:
+1. `list-microphones.bat` çalıştır.
+2. Mikrofon ID'sini bul.
+3. `config.json` içindeki `input_device` değerini değiştir.
+4. Mikrofon değişince `calibrate.bat` ile yeniden kalibre et.
+
+Örnek:
+
+```json
+"input_device": 15
+```
+
+## Çift şıklatma gecikmesi
+
+Tek şıklatma komutu, ikinci şıklatma ihtimali için varsayılan olarak yaklaşık `0.48` saniye bekler. Bu süre `config.json` içindeki `double_snap_window` ile değiştirilebilir.
+
+## Bildirim ayarları
+
+`feedback_config.json`:
 
 ```json
 {
@@ -94,76 +115,41 @@ Bu özellik **henüz modeli otomatik olarak yeniden eğitmez**; temiz ve düzenl
 }
 ```
 
-- Bildirimleri kapatmak için `notifications_enabled` değerini `false` yap.
-- Kaydedilen ses penceresini `capture_seconds` ile değiştir.
-- Geçici kayıtların kaç saat tutulacağını `pending_retention_hours` ile değiştir.
-
-## Algılama hassasiyeti
-
-`config.json` dosyasını Not Defteri ile aç.
-
-Yanlışlıkla davul, alkış veya masa tıklamasını şıklatma sanıyorsa:
-
-```json
-"min_peak": 0.06,
-"min_high_frequency_ratio": 0.4
-```
-
-Şıklatmanı algılamıyorsa:
-
-```json
-"min_rms": 0.004,
-"min_peak": 0.03
-```
-
-Tek şıklatmadan sonra komut gecikmesi, çift şıklatma ihtimalini beklemek için varsayılan olarak yaklaşık `0.48` saniyedir. Bunu `double_snap_window` ile değiştirebilirsin.
-
-## Farklı mikrofon seçme
-
-1. `list-microphones.bat` dosyasını çalıştır.
-2. Kullanmak istediğin mikrofonun başındaki sayıyı bul.
-3. `config.json` içindeki `input_device` değerini o sayı yap:
-
-```json
-"input_device": 3
-```
-
-Varsayılan Windows mikrofonunu kullanmak için değer `null` kalmalı.
-
 ## Windows başlangıcı
 
 - Başlangıca ekle: `startup-enable.bat`
 - Başlangıçtan kaldır: `startup-disable.bat`
 
+Önce görünür modda yeterince test edip ardından başlangıca ekle.
+
 ## Sorun giderme
 
-### Bildirim geliyor ama düğme çalışmıyor
+### Kişisel model bulunamadı
 
-`install.bat` dosyasını yeniden çalıştır. Kurucu `spotify-snap://` feedback protokolünü tekrar kaydeder.
+`calibrate.bat` çalıştır.
+
+### Mikrofon değişti veya masa düzeni değişti
+
+Kalibrasyonu tekrarla. Model mikrofona, mesafeye, şıklatma biçimine ve klavyenin akustik karakterine özeldir.
+
+### Bildirim düğmesi çalışmıyor
+
+`install.bat` dosyasını yeniden çalıştır.
 
 ### Mikrofon açılamadı
 
-Windows'ta **Ayarlar > Gizlilik ve güvenlik > Mikrofon** bölümüne girip:
-
-- Mikrofon erişimini aç.
-- “Masaüstü uygulamalarının mikrofonunuza erişmesine izin ver” seçeneğini aç.
-
-Ardından `test.bat` çalıştır.
+Windows'ta **Ayarlar > Gizlilik ve güvenlik > Mikrofon** bölümünde mikrofon ve masaüstü uygulaması erişimini aç.
 
 ### Spotify bulunamadı
 
-Spotify masaüstü uygulamasını açıp bir şarkı çal. Web tarayıcısındaki Spotify sekmesi hedeflenmez; uygulama özellikle Spotify'ın Windows medya oturumunu arar.
-
-### Çok fazla yanlış algılama var
-
-Mümkünse kulaklık kullan. Hoparlörden gelen sert hi-hat ve clap sesleri akustik olarak parmak şıklatmasına benzeyebilir. `min_peak` ve `min_high_frequency_ratio` değerlerini artır.
+Spotify masaüstü uygulamasını açıp şarkı çal. Web oynatıcı hedeflenmez.
 
 ## Gereksinimler
 
 - Windows 10 veya 11
-- Çalışan bir mikrofon
+- Mikrofon
 - Spotify masaüstü uygulaması
-- Python 3.11+ (`install.bat`, yoksa Python 3.12 kurmayı dener)
+- Python 3.11+
 
 ## Lisans
 
