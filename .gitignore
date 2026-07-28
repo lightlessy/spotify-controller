@@ -2,5 +2,6 @@
 __pycache__/
 *.py[cod]
 spotify_snap.log
+snap_model.json
 training_data/
 .DS_Store
