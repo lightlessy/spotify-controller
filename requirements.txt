@@ -1,4 +1,4 @@
 numpy>=1.26,<3
 sounddevice>=0.4.7,<1
-winrt-Windows.Media.Control>=2.3,<4
+winrt-Windows.Media.Control[all]>=3.2,<4
 winotify==1.1.0
