@@ -1,6 +1,21 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+function Test-PythonCommand {
+    param(
+        [string]$Command,
+        [string[]]$PrefixArgs = @()
+    )
+
+    try {
+        $arguments = @($PrefixArgs) + @("--version")
+        & $Command $arguments *> $null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Find-Python {
     $localCandidates = @(
         "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
@@ -9,14 +24,20 @@ function Find-Python {
     )
 
     foreach ($candidate in $localCandidates) {
-        if (Test-Path $candidate) { return $candidate }
+        if ((Test-Path $candidate) -and (Test-PythonCommand -Command $candidate)) {
+            return [PSCustomObject]@{ Command = $candidate; PrefixArgs = @() }
+        }
+    }
+
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($py -and (Test-PythonCommand -Command $py.Source -PrefixArgs @("-3"))) {
+        return [PSCustomObject]@{ Command = $py.Source; PrefixArgs = @("-3") }
     }
 
     $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) { return $python.Source }
-
-    $py = Get-Command py -ErrorAction SilentlyContinue
-    if ($py) { return "py" }
+    if ($python -and (Test-PythonCommand -Command $python.Source)) {
+        return [PSCustomObject]@{ Command = $python.Source; PrefixArgs = @() }
+    }
 
     return $null
 }
@@ -34,26 +55,33 @@ if (-not $python) {
         exit 1
     }
 
-    Write-Host "Python 3.12 bulunamadı; winget ile kullanıcı hesabına kuruluyor..."
+    Write-Host "Python bulunamadı; Python 3.12 kullanıcı hesabına kuruluyor..."
     & winget install --exact --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -ne 0) { throw "Python kurulumu başarısız oldu." }
+
     $python = Find-Python
     if (-not $python) {
-        $python = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+        $knownPython = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+        if ((Test-Path $knownPython) -and (Test-PythonCommand -Command $knownPython)) {
+            $python = [PSCustomObject]@{ Command = $knownPython; PrefixArgs = @() }
+        } else {
+            throw "Python kuruldu ancak bu oturumda bulunamadı. install.bat dosyasını yeniden çalıştır."
+        }
     }
 }
 
-if ($python -eq "py") {
-    & py -3 -m venv .venv
-} else {
-    & $python -m venv .venv
-}
+$venvArguments = @($python.PrefixArgs) + @("-m", "venv", ".venv")
+& $python.Command $venvArguments
+if ($LASTEXITCODE -ne 0) { throw "Sanal ortam oluşturulamadı." }
 
 $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $venvPython)) { throw "Sanal ortam oluşturulamadı." }
 
 & $venvPython -m pip install --disable-pip-version-check --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "pip güncellenemedi." }
+
 & $venvPython -m pip install --disable-pip-version-check -r requirements.txt
+if ($LASTEXITCODE -ne 0) { throw "Python paketleri kurulamadı." }
 
 Write-Host ""
 & $venvPython spotify_snap.py --check
